@@ -27,35 +27,54 @@ class KernelBayesMIL:
         self.__params = copy.copy(params)
 
     
-    def fit(self, X, Y):
+    def fit(self, X, Y, Z=None):
         """Fit model on the data"""
         # Split positive and negative bags' instances
         cX0, cX1 = None, None
         class0_bag_ids, class1_bag_ids = None, None
+        cZ0, cZ1 = None, None
         for i in range(len(X)):
             tmp = X[i]
             bag_ids = np.full(len(tmp), i)
             if Y[i]==0:
                 cX0 = tmp.copy() if cX0 is None else np.r_[cX0, tmp]
                 class0_bag_ids = bag_ids if class0_bag_ids is None else np.r_[class0_bag_ids, bag_ids]
+                if Z is not None:
+                    cZ0 = Z[i] if cZ0 is None else np.r_[cZ0, Z[i]]
             else:
                 cX1 = tmp.copy() if cX1 is None else np.r_[cX1, tmp]
                 class1_bag_ids = bag_ids if class1_bag_ids is None else np.r_[class1_bag_ids, bag_ids]
+                if Z is not None:
+                    cZ1 = Z[i] if cZ1 is None else np.r_[cZ1, Z[i]]
         
         # Set grid points for KDE
-        self.class0_grid_, _ = train_test_split(cX0, train_size=self.__train_grid_size, random_state=self.__random_state, 
-                                                stratify=class0_bag_ids)
-        self.class1_grid_, _ = train_test_split(cX1, train_size=self.__train_grid_size, random_state=self.__random_state, 
-                                                stratify=class1_bag_ids)
+        self.grid_ = {0:None, 1:None}
+        for k, cX, cZ, class_bag_ids in zip([0,1], [cX0, cX1], [cZ0, cZ1], [class0_bag_ids, class1_bag_ids]):
+            if Z is not None:
+                m = len(cZ)
+                cZ = 100 * class_bag_ids + cZ
+                _, counts = np.unique_counts(cZ)
+                clusters_with_one_event = np.flatnonzero(counts == 1)
+                all_inds = np.arange(len(cZ))
+                alone_inds = all_inds[np.isin(cZ, clusters_with_one_event)]
+                other_inds = np.setdiff1d(all_inds, alone_inds, assume_unique=True)
+                self.grid_[k], _ = train_test_split(cX[other_inds], train_size=min(self.__train_grid_size,m-len(counts)), random_state=self.__random_state, 
+                                                        stratify=cZ[other_inds])
+                self.grid_[k] = np.r_[self.grid_[k], cX[alone_inds]]
+            else:
+                self.grid_[k], _ = train_test_split(cX, train_size=min(self.__train_grid_size,len(cX)-len(X)), random_state=self.__random_state, 
+                                                        stratify=class_bag_ids)
         
+        del cX0, cX1
+        del cZ0, cZ1
         # Set logging config
         logging.basicConfig(level=logging.INFO)
         # Fit Model for each block in the features partition
         self.train_scores_per_block_ = {0:{}, 1:{}}
         for j, block in enumerate(self.__ft_partition):
             logging.info(f"Fitting model for feature block {j+1} ...")
-            for k, class_grid in zip([0,1], [self.class0_grid_, self.class1_grid_]):
-                kde_param_res = CVKDE(class_grid[:,block], **self.__params)
+            for k in range(2):
+                kde_param_res = CVKDE(self.grid_[k][:,block], **self.__params)
                 self.train_scores_per_block_[k][tuple(block)] = kde_param_res
         
         # Bag labels proportion
@@ -63,19 +82,30 @@ class KernelBayesMIL:
         return self
     
     
-    def score(self, X):
+    def score(self, X, Z=None):
         # Set logging config
         logging.basicConfig(level=logging.WARNING)
 
         scores = np.empty((len(X), 2))
         for i in range(len(X)):
-            _, X_i = train_test_split(X[i], test_size=min(self.__eval_size,len(X[i])-2), random_state=self.__random_state)
-            for k in [0, 1]:
+            if Z is None:
+                _, X_i = train_test_split(X[i], test_size=min(self.__eval_size,len(X[i])-2), random_state=self.__random_state)
+            else:
+                m = len(X[i])
+                _, counts = np.unique_counts(Z[i])
+                clusters_with_one_event = np.flatnonzero(counts == 1)
+                all_inds = np.arange(m)
+                alone_inds = all_inds[np.isin(Z[i], clusters_with_one_event)]
+                other_inds = np.setdiff1d(all_inds, alone_inds, assume_unique=True)
+                _, X_i = train_test_split(X[i][other_inds], test_size=min(self.__eval_size,m-len(counts)), random_state=self.__random_state, 
+                                                        stratify=X[i][other_inds])
+                X_i = np.r_[X_i, X[i][alone_inds]]
+            for k in range(2):
                 full_loglikelihood = 0
                 for block in self.__ft_partition:
                     block_kde_params = self.train_scores_per_block_[k][tuple(block)]
                     lls = compute_kde(block_kde_params['bandwidth'],
-                                      self.class0_grid_[:, block] if k==0 else self.class1_grid_[:, block],
+                                      self.grid_[0][:, block] if k==0 else self.grid_[1][:, block],
                                       X_i[:, block]
                                       )
                     if np.all(lls.mask):
@@ -103,7 +133,7 @@ class KernelBayesMIL:
             for block in self.__ft_partition:
                 block_kde_params = self.train_scores_per_block_[k][tuple(block)]
                 lls = compute_kde(block_kde_params['bandwidth'],
-                                    self.class0_grid_[:, block] if k==0 else self.class1_grid_[:, block],
+                                    self.grid_[0][:, block] if k==0 else self.grid_[1][:, block],
                                     X_i[:, block]
                                     )
                 full_loglikelihoods += lls
@@ -120,7 +150,7 @@ class KernelBayesMIL:
             for block in self.__ft_partition:
                 block_kde_params = self.train_scores_per_block_[k][tuple(block)]
                 lls = compute_kde(block_kde_params['bandwidth'],
-                                    self.class0_grid_[:, block] if k==0 else self.class1_grid_[:, block],
+                                    self.grid_[0][:, block] if k==0 else self.grid_[1][:, block],
                                     X_i[:, block]
                                     )
                 full_loglikelihoods += lls

@@ -1,11 +1,15 @@
 import numpy as np
+import pandas as pd
 from sklearn.datasets import make_blobs, make_classification
 from sklearn.model_selection import train_test_split
 from scipy.stats import multivariate_normal
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 
 
 
 
+### Toy data generation
 def mil_contamined_gaussian(n_bags=30, pos_bag_rate=0.5, n_instances_per_bag=100, loc_eps_sigma=1, scale_eps_sigma=1, seed=42):
     n_pos_bags = int(n_bags * pos_bag_rate)
     w_tau = 0.5
@@ -70,3 +74,46 @@ def eigenv_pertubation(X, eps=1e-3):
     # L = scipy.linalg.cholesky(sigma_p, lower=True)
     # return (X - mu) @ W.T @ L.T + mu
     return multivariate_normal.rvs(mean=mu, cov=sigma_p, size=len(X))
+
+
+
+
+### Neighborhood graph optimization
+def minimize_graph_connections(neighbors, weights):
+    N, k = neighbors.shape
+    k_min = int(np.log(N)) + 1
+    row = np.ravel(np.outer(np.arange(N), np.ones(k)))
+    col = np.ravel(neighbors)
+    adj_matrix = coo_matrix((np.ones(N * k), (row, col)), shape=(N, N))
+    n_cc, _ = connected_components(adj_matrix, directed=False)
+
+    if n_cc != 1:
+        return neighbors
+    else:
+        max_w_neighbors = weights[neighbors[:, 1:]].max(axis=1)
+        peak_inds = np.flatnonzero(max_w_neighbors < weights)
+
+        def _is_peak_notin_ngbs(x):
+            return not np.any(np.isin(peak_inds, x, assume_unique=True))
+
+        inds = np.flatnonzero(pd.Series(neighbors.tolist()).apply(_is_peak_notin_ngbs).to_numpy())
+        kt = k - 1
+        continu = True
+        ngbs = neighbors.copy()
+        while (kt >= k_min) and continu:
+            ngbs[inds, kt] = inds
+            col = np.ravel(ngbs)
+            adj_matrix = coo_matrix((np.ones(N * k), (row, col)), shape=(N, N))
+            n_cc, _ = connected_components(adj_matrix, directed=False)
+            continu = n_cc == 1
+            kt -= 1
+        ngbs[inds, k_min] = neighbors[inds, k_min].copy() if continu else neighbors[inds, kt + 1].copy()
+        ngbs_series = pd.Series(ngbs.tolist())
+
+        def _drop_repeated_ngbs(x):
+            tab = np.array(x)
+            return tab[tab != tab[0]].tolist()
+
+        ngbs = ngbs_series.apply(_drop_repeated_ngbs).to_list()
+        return ngbs
+ 
