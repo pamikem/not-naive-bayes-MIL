@@ -1,10 +1,12 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.datasets import make_blobs, make_classification
 from sklearn.model_selection import train_test_split
 from scipy.stats import multivariate_normal
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
+import seaborn as sns
 
 
 
@@ -116,4 +118,124 @@ def minimize_graph_connections(neighbors, weights):
 
         ngbs = ngbs_series.apply(_drop_repeated_ngbs).to_list()
         return ngbs
- 
+
+
+
+
+
+### Dataviz utils
+def radar_plot(model, X_i, markers, top_contrib_instances, tau, advers=False, color='blue'):
+    d = X_i.shape[1]
+    retained_vars = np.arange(d)
+    Y_scores = model.score([X_i])
+    criterion_val = np.log(model.alpha_) - np.log(1 - model.alpha_) + Y_scores[0,1] - Y_scores[0,0]
+
+    top_advers_instances = np.setdiff1d(np.arange(len(X_i)), top_contrib_instances)
+    if not advers:
+        x_profil_stats = X_i[top_contrib_instances][:,retained_vars].mean(axis=0).tolist()
+    else:
+        x_profil_stats = X_i[top_advers_instances][:,retained_vars].mean(axis=0).tolist()
+    x_avg_stats = X_i[:, retained_vars].mean(axis=0).tolist()
+
+     # We are going to plot the first line of the data frame.
+    # But we need to repeat the first value to close the circular graph:
+    x_profil_stats += x_profil_stats[:1]
+    x_avg_stats += x_avg_stats[:1]
+
+    # What will be the angle of each axis in the plot? (we divide the plot / number of variable)
+    angles = [j / float(d) * 2 * np.pi for j in range(d)]
+    angles += angles[:1]
+
+    # Initialise the spider plot
+    _, ax = plt.subplots(1, 1, figsize=(6, 5), subplot_kw={'projection': 'polar'})
+
+    # If you want the first axis to be on top:
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+
+    # Draw one axe per variable + add labels
+    plt.xticks(angles[:-1], markers[retained_vars], color='black', size=8)
+    
+    # Draw ylabels
+    n_bins = 5
+    bins = np.round(np.linspace(0, 1, n_bins), 2)
+    ax.set_rlabel_position(0)
+    plt.yticks(bins[1:-1], bins[1:-1].astype(str), color="grey", size=7)
+    plt.ylim(0,1)
+
+    # Plot data
+    ax.plot(angles, x_profil_stats, linewidth=1, linestyle='solid', c=color)
+    ax.fill(angles, x_profil_stats, c='blue' if not advers else 'goldenrod', alpha=0.1)
+
+    ax.plot(angles, x_avg_stats, linewidth=1, linestyle='--', c='black')
+    ax.fill(angles, x_avg_stats, 'black', alpha=0.1)
+
+    belief_score = round(np.abs(criterion_val - tau),1)
+    if not advers:
+        ratio_top_instances = round(100 * (len(top_contrib_instances) / len(X_i)),1)
+        ax.set_title(f"Belief score : {belief_score}| N top instances : {len(top_contrib_instances)} ({ratio_top_instances}%)")
+    else:
+        ratio_top_instances = round(100 * (len(top_advers_instances) / len(X_i)),1)
+        ax.set_title(f"Belief score : {belief_score}| N adv instances : {len(top_advers_instances)} ({ratio_top_instances}%)")
+    plt.show()
+
+
+def ridgeline_plot(X, markers, fname, p_ids, p_labels=[], annot_colors=None, height_ratio=0.6, show_mean=False, show_median=False):
+    sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+    fig, axs = plt.subplots(nrows=len(p_ids), ncols=1, figsize=(7,height_ratio*len(p_ids)))
+    axs = axs.flatten()
+
+    if len(p_labels)>0 and annot_colors==None:
+        annot_colors = {}
+        uniq_annots = np.unique(p_labels)
+        tab_colors = sns.color_palette('hls', n_colors=len(uniq_annots))
+        for annot, c in zip(uniq_annots, tab_colors):
+            annot_colors[annot] = c
+
+    xmin, xmax = np.inf, -np.inf
+
+    for i, X_i in enumerate(X):
+        data = pd.DataFrame(X_i, columns=markers)
+        sns.kdeplot(data=data, x=fname, 
+                    bw_adjust=1.0, clip_on=False,
+                    color='blue' if len(p_labels)==0 else annot_colors[p_labels[i]], fill=True,
+                    linewidth=1.2,
+                    ax=axs[i]
+        )
+        # Add white contours
+        # sns.kdeplot(data=data, x=fname, 
+        #             bw_adjust=1.0, clip_on=False,
+        #             color='white', linewidth=1.5,
+        #             ax=axs[i]
+        # )
+        axs[i].axhline(y=0, lw=1.2, clip_on=False, color='blue' if len(p_labels)==0 else annot_colors[p_labels[i]])
+        xmin = min(xmin,data[fname].min())
+        xmax = max(xmax, data[fname].max())
+        if show_mean:
+            axs[i].axvline(data[fname].mean(), color='black', linestyle='--', label='Mean')
+        if show_median:
+            axs[i].axvline(data[fname].median(), color='red', label='Median')
+
+    fig.subplots_adjust(hspace=-0.3)
+
+    for i, ax in enumerate(axs):
+        ax.set_xlim(xmin, xmax)
+        ax.text(xmin, 0.02, str(p_ids[i]),
+                fontweight='bold', fontsize=12,
+                color='grey'
+        )
+        if i<len(axs)-1:
+            ax.set_axis_off()
+        else:
+            sns.despine(ax=ax, bottom=True, left=True)
+            plt.setp(ax.get_xticklabels(), fontsize=12, fontweight='bold')
+            ax.set_xlabel(fname, fontweight='bold', fontsize=12)
+            ax.set_ylabel('')
+            ax.tick_params(left = False, right = False , labelleft = False) 
+    
+    # fig.suptitle('Density comparion across patients',
+    #            fontsize=14,
+    #            fontweight=14)
+    if show_mean or show_median:
+        axs[0].legend(loc='upper right', facecolor='white')
+    plt.show()

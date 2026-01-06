@@ -48,7 +48,7 @@ class ISDE:
             self.scores_by_subsets_ = {}
         d = X.shape[1]
         W, Z = train_test_split(
-            X, train_size=self.__grid_size, test_size=self.__eval_size, random_state=self.__random_state, stratify=y
+            X, train_size=self.__grid_size, test_size=min(self.__eval_size, len(X)-self.__grid_size), random_state=self.__random_state, stratify=y
         )
         logging.basicConfig(level=logging.INFO)
 

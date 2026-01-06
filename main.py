@@ -53,11 +53,12 @@ def compute_clustering_per_aml_patient():
         k_max = 50
         knn_estimator = KNearestNeighbors(
             k=k_max,
+            return_distance=True,
             metric='euclidean',
             implementation='ckdtree',
             n_jobs=2
         )
-        neighbors = knn_estimator.fit_transform(X)
+        neighbors, distances = knn_estimator.fit_transform(X)
 
         # Compute DTM weights
         k_dtm = 50
@@ -65,10 +66,10 @@ def compute_clustering_per_aml_patient():
         dtm_estimator = DistanceToMeasure(
             k=k_dtm,
             q=2,
-            d=X.shape[1],
+            dim=X.shape[1],
             metric='neighbors'
         )
-        weights = np.log(dtm_estimator.fit_transform(neighbors[:,:k_dtm]))
+        weights = np.log(dtm_estimator.fit_transform(distances))
 
         # Optimize kNN graph
         t0 = time.time()
