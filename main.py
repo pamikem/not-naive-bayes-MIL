@@ -40,10 +40,11 @@ def compute_clustering_per_aml_patient():
         logging.info(f"Processing patient {p_id}...")
         tmp = data[data.p_id==p_id].drop(columns=['p_id', 'tomato_cluster'])
         X = tmp.to_numpy()
-        del tmp
         n, d = X.shape
+        del tmp
 
         # Preprocessing
+        X = X.copy()
         for j in range(d):
             X[:,j] = correct_repeat_values(X[:,j])
         scaler = MinMaxScaler()
