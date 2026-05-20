@@ -165,7 +165,7 @@ def radar_plot(model, X_i, markers, top_contrib_instances, tau, advers=False, co
 
     # Plot data
     ax.plot(angles, x_profil_stats, linewidth=1, linestyle='solid', c=color)
-    ax.fill(angles, x_profil_stats, c='blue' if not advers else 'goldenrod', alpha=0.1)
+    ax.fill(angles, x_profil_stats, c=color, alpha=0.1)
 
     ax.plot(angles, x_avg_stats, linewidth=1, linestyle='--', c='black')
     ax.fill(angles, x_avg_stats, 'black', alpha=0.1)
